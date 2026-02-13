@@ -123,261 +123,240 @@ st.markdown("""
     
     .info-box h4 {
         margin: 0 0 0.5rem 0;
-        font-size: 1.1rem;
         color: #667eea;
-        font-weight: 600;
+        font-weight: 700;
     }
     
-    /* Metrics grid */
-    .metric-card {
-        background: white;
-        border-radius: 12px;
-        padding: 1.5rem;
-        box-shadow: 0 2px 15px rgba(0,0,0,0.05);
-        text-align: center;
-        border: 1px solid #eeeeee;
-    }
-    
-    .metric-value {
-        font-size: 2.5rem;
-        font-weight: 800;
-        color: #667eea;
-        margin: 0.5rem 0;
-    }
-    
-    .metric-label {
-        font-size: 0.9rem;
-        color: #6b7380;
-        text-transform: uppercase;
-        font-weight: 600;
-        letter-spacing: 0.5px;
+    /* Table styling */
+    .dataframe {
+        font-size: 0.95rem;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# Secure API key management - read from environment variables
-import os
+# Header
+st.markdown('''
+<div class="main-header">
+    <h1>🚀 IQ Finance | Company Intelligence</h1>
+    <p>Deep company research powered by DeepSeek AI + Web Research</p>
+</div>
+''', unsafe_allow_html=True)
 
-BRAND_API_KEY = os.environ.get("BRAND_API_KEY")
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-
-if not BRAND_API_KEY or not OPENROUTER_API_KEY:
-    st.error("⚠️ API keys not configured. Please add BRAND_API_KEY and OPENROUTER_API_KEY to Streamlit Cloud secrets.")
+# Get API credentials from Streamlit secrets (deployed) or env vars (local)
+try:
+    DEEPSEEK_API_KEY = st.secrets["DEEPSEEK_API_KEY"]
+    PERPLEXITY_API_KEY = st.secrets.get("PERPLEXITY_API_KEY")  # Optional
+except KeyError:
+    st.error("⚠️ **API Keys Not Configured**")
+    st.info("""
+    Please add your API keys to:
+    - `.streamlit/secrets.toml` (local)
+    - Streamlit Cloud Secrets (when deployed)
+    
+    Example `secrets.toml`:
+    ```toml
+    DEEPSEEK_API_KEY = "your-deepseek-api-key"
+    PERPLEXITY_API_KEY = "your-perplexity-api-key"  # optional
+    ```
+    """)
     st.stop()
 
-def search_company_deepseek(company_name):
-    """Search for company info using DeepSeek API"""
-    try:
-        api_url = "https://api.brand.ai/research"
-        
-        payload = {
-            "company": company_name,
-            "client_user_id": "iqfinance"
-        }
-        
-        headers = {
-            "Authorization": f"Bearer {BRAND_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        
-        response = httpx.post(api_url, json=payload, headers=headers, timeout=30.0)
-        response.raise_for_status()
-        
-        return response.json()
-    except Exception as e:
-        return {"error": str(e)}
+# Initialize session state
+if 'company_data' not in st.session_state:
+    st.session_state.company_data = None
 
-def enrich_with_ai_analysis(company_data, company_name):
-    """Enrich company data with AI-generated insights"""
+def search_deepseek(company_name: str) -> dict:
+    """Search for company using DeepSeek AI"""
     try:
-        # Create a comprehensive prompt for analysis
-        prompt = f"""
-        Analyze the following company data for {company_name} and provide:
-        
-        1. A brief executive summary (2-3 sentences)
-        2. Key business strengths (4-5 bullet points)
-        3. Potential risks or challenges (3-4 bullet points)
-        4. Market positioning (1-2 sentences)
-        5. Growth potential (1-2 sentences)
-        
-        Company Data:
-        {json.dumps(company_data, indent=2)}
-        
-        Format your response as JSON with keys: executive_summary, strengths, risks, market_position, growth_potential
-        """
-        
-        api_url = "https://openrouter.ai/api/v1/chat/completions"
+        url = "https://api.deepseek.com/v1/chat/completions"
         
         payload = {
-            "model": "anthropic/claude-3-5-sonnet",
+            "model": "deepseek-chat",
             "messages": [
-                {
-                    "role": "user",
-                    "content": prompt
-                }
+                {"role": "system", "content": "You are a business intelligence assistant. Provide detailed, structured information."},
+                {"role": "user", "content": f"""
+                Provide a comprehensive analysis of the company "{company_name}" in JSON format with these exact keys:
+                
+                {{
+                    "company_name": "string",
+                    "website": "string",
+                    "industry": "string",
+                    "founded": "string",
+                    "headquarters": "string",
+                    "employee_count": "string",
+                    "funding": "string",
+                    "description": "string",
+                    "products_services": ["string"],
+                    "key_people": ["string"],
+                    "recent_news": ["string"],
+                    "competitors": ["string"],
+                    "tech_stack": ["string"]
+                }}
+                
+                Include only the JSON object without any explanation.
+                """}
             ]
         }
         
         headers = {
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {DEEPSEEK_API_KEY}"
         }
         
-        response = httpx.post(api_url, json=payload, headers=headers, timeout=60.0)
+        response = httpx.post(url, headers=headers, json=payload, timeout=60.0)
         response.raise_for_status()
         
         result = response.json()
-        ai_content = result["choices"][0]["message"]["content"]
+        content = result["choices"][0]["message"]["content"]
         
-        # Try to parse JSON from AI response
-        try:
-            ai_analysis = json.loads(ai_content)
-        except:
-            # If not JSON, return as text
-            ai_analysis = {"analysis": ai_content}
+        # Extract JSON from response (handle markdown code blocks)
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0].strip()
         
-        return ai_analysis
+        return json.loads(content)
         
     except Exception as e:
         return {"error": str(e)}
 
-# Main user interface
-def main():
-    # Header
+def get_web_research(company_name: str) -> dict:
+    """Get additional web research using Perplexity AI (if configured)"""
+    if not PERPLEXITY_API_KEY:
+        return {"note": "Perplexity API not configured"}
+        
+    try:
+        url = "https://api.perplexity.ai/chat/completions"
+        
+        payload = {
+            "model": "sonar-small-online",
+            "messages": [
+                {"role": "system", "content": "Provide the latest information about the company."},
+                {"role": "user", "content": f"What are the latest news and updates about {company_name}?"}
+            ]
+        }
+        
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {PERPLEXITY_API_KEY}"
+        }
+        
+        response = httpx.post(url, headers=headers, json=payload, timeout=30.0)
+        response.raise_for_status()
+        
+        result = response.json()
+        return {
+            "content": result["choices"][0]["message"]["content"],
+            "citations": result.get("citations", [])
+        }
+        
+    except Exception as e:
+        return {"error": str(e)}
+
+# Sidebar
+with st.sidebar:
+    st.markdown("## 🔍 Research")
+    
+    company_name = st.text_input(
+        "Company Name",
+        placeholder="e.g., Stripe, AirBnB, Figma",
+        help="Enter any company name to analyze"
+    )
+    
+    if st.button("🔥 Start Analysis", type="primary", use_container_width=True):
+        if not company_name:
+            st.warning("⚠ Please enter a company name")
+        else:
+            # Loading animation
+            st.markdown('''
+            <div class="loading-container">
+                <div class="spinner"></div>
+                <div class="loading-text">Analyzing {}...</div>
+            </div>
+            '''.format(company_name), unsafe_allow_html=True)
+            
+            # Fetch data
+            deepseek_data = search_deepseek(company_name)
+            
+            if "ERROR" not in deepseek_data:
+                web_data = get_web_research(company_name)
+                st.session_state.company_data = {
+                    "deepseek": deepseek_data,
+                    "web": web_data
+                }
+                st.rerun()
+            else:
+                st.error(f"⚠ Error: {deepseek_data.get('error', 'Unknown error')}")
+    
     st.markdown("""
-    <div class="main-header">
-        <h1>🚀 IQ Finance</h1>
-        <p>Deep Company Intelligence for B2B Decision Makers</p>
-    </div>
-    """, unsafe_allow_html=True)
+    ---
+    ## 💡 About
+    This tool uses:
+    - 🪐 **DeepSeek AI**: Deep reasoning & analysis
+    - 🌎 **Web Research**: Latest news & updates
+    """)
+
+# Main content
+if st.session_state.company_data:
+    data = st.session_state.company_data["deepseek"]
     
-    st.divider()
-    
-    # Company input
-    col-1, colider, col2 = st.columns([3, 0.1, 1])
+    # Company Header Card
+    col1, divider, col2 = st.columns([3, 0.1, 1])
     
     with col1:
-        company_name = st.text_input(
-            "⬠️ Enter company name",
-            placeholder="e.g., Salesforce, Shopify, Ycombinator...",
-            help="Enter any company name to get detailed intelligence"
-        )
+        st.markdown(f"# {data.get('company_name', 'Unknown')}")
+        st.markdown(f"🌐 [{data.get('website', 'N/A')}]({data.get('website', '#')})")
+        st.markdown(f"🏭 {data.get('industry', 'N/A')}")
+        st.markdown(f"📍 {data.get('headquarters', 'N/A')}")
     
     with col2:
-        st.markdown("<br />", unsafe_allow_html=True)
-        search_button = st.button(
-            "🚀 Analyze Company",
-            type="primary",
-            use_container_width=True
-        )
+        st.metric("Founded", data.get('founded', 'N/A'))
+        st.metric("Employees", data.get('employee_count', 'N/A'))
+        st.metric("Funding", data.get('funding', 'N/A'))
     
-    if search_button and company_name:
-        # Loading animation
-        st.markdown("""
-        <div class="loading-container">
-            <div class="spinner"></div>
-            <div class="loading-text">🖠 Analyzing {company_name}...</div>
-        </div>
-        """.format(company_name=company_name), unsafe_allow_html=True)
-        
-        # Search DeepSeek
-        company_data = search_company_deepseek(company_name)
-        
-        if "error" in company_data:
-            st.error(f"Error searching company: {company_data['error']}")
-            return
-        
-        # Get AI analysis
-        with st.spinner('🥖  Generating AI-powered insights...'):
-            ai_analysis = enrich_with_ai_analysis(company_data, company_name)
-        
-        # Remove loading animation
-        st.empty()
-        
-        # Success banner
-        st.markdown(f"""
-        <div style="background: linear-gradient(135deg, #10b981 0, #059c5a 100%); padding: 1rem; border-radius: 10px; color: white; text-align: center; margin-bottom: 2rem; box-shadow: 0 4px 15px rgba(16, 185, 129, 0.3);">
-            <h3 style="margin: 0;">✅ Analysis Complete for {company_name}</h3>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        st.divider()
-        
-        # Company Overview
-        st.markdown(f'<div class="section-header">🏣 Company Overview</div>', unsafe_allow_html=True)
-        
-        if "executive_summary" in ai_analysis:
-            st.markdown(f"""
-            <div class="info-box">
-                <h4>Executive Summary</h4>
-                <p>{ai_analysis['executive_summary']}</p>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        # Strengths & Risks
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown(f'<div class="section-header">🖚 Key Strengths</div>', unsafe_allow_html=True)
-            if "strengths" in ai_analysis:
-                for strength in ai_analysis['strengths']:
-                    st.markdown(g"✅‎ ```{strength}```")
-        
-        with col2:
-            st.markdown(f'<div class="section-header">⚠️ Potential Risks</div>', unsafe_allow_html=True)
-            if "risks" in ai_analysis:
-                for risk in ai_analysis['risks']:
-                    st.markdown(f"❬⸟ ```{risk}```")
-        
-        st.divider()
-        
-        # Market Position & Growth
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            if "market_position" in ai_analysis:
-                st.markdown(f'<div class="section-header">🏦 Market Position</div>', unsafe_allow_html=True)
-                st.markdown(f"""
-                <div class="info-box">
-                    <p>{ai_analysis['market_position']}</p>
-                </div>
-                """, unsafe_allow_html=True)
-        
-        with col2:
-            if "growth_potential" in ai_analysis:
-                st.markdown(f'📈 Growth Potential</div>', unsafe_allow_html=True)
-                st.markdown(f"""
-                <div class="info-box">
-                    <p>{ai_analysis['growth_potential']}</p>
-                </div>
-                """, unsafe_allow_html=True)
-        
-        st.divider()
-        
-        # Raw Data
-        with st.expander("📊 View Raw Data"):
-            st.json(company_data)
+    # Description
+    st.markdown(f"**Overview:** {data.get('description', 'N/A')}")
     
-    # Sidebar info
-    with st.sidebar:
-        st.markdown("## 🐮 About IQ Finance")
-        st.markdown("""
-        IQ Finance combines:
+    # Products & Services
+    st.markdown("## 🛠 Products & Services")
+    for item in data.get('products_services', []):
+        st.markdown(f"- ✓{item}")
+    
+    # Key People
+    cola, colb = st.columns(2)
+    
+    with cola:
+        st.markdown("## 👥 Key People")
+        for person in data.get('key_people', []):
+            st.markdown(f"- 👤 {person}")
+    
+    with colb:
+        st.markdown("## 🎯 Competitors")
+        for comp in data.get('competitors', []):
+            st.markdown(f"- 🎯 {comp}")
+    
+    # Tech Stack
+    st.markdown("## 💻 Tech Stack")
+    st.write(data.get('tech_stack', []))
+    
+    # Recent News
+    st.markdown("## 📰 Recent News")
+    for news in data.get('recent_news', []):
+        st.info(news)
+    
+    # Web Research (if available)
+    if st.session_state.company_data.get("web") and "content" in st.session_state.company_data["web"]:
+        st.markdown("## 🌐 Latest Web Updates")
+        st.markdown(st.session_state.company_data["web"]["content"])
         
-        - “ DeepSeek AI research
-        - ✅ Real-time web data
-        - 🤖  AI-powered analysis
-        
-        Get actionable B2B intelligence in seconds.
-        """)
-        
-        st.divider()
-        
-        st.markdown("## ⚘ Powered By")
-        st.markdown("""
-        - **DeepSeek AI**: Real-time company research
-        - **Claude 3.5 Sonnet**: Advanced analysis & insights
-        """)
-
-if __name__ == "__main__":
-    main()
+        if st.session_state.company_data["web"].get("citations"):
+            st.markdown("**Sources:**")
+            for cite in st.session_state.company_data["web"]["citations"]:
+                st.markdown(f"- [{cite}]({cite})")
+else:
+    st.markdown("""
+    <div class="info-box">
+        <h4>👈 Start by entering a company name</h4>
+        <p>Enter any company name in the sidebar to begin your analysis. The system will gather comprehensive intelligence including company overview, key people, competitors, tech stack, and recent news.</p>
+    </div>
+    """, unsafe_allow_html=True)
